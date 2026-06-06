@@ -86,6 +86,7 @@ NON_SDM_FEATURE_MAP: dict[str, tuple[str, str]] = {
     "water_consumption":    ("water_consumption",     "state"),
     "hsi_close":            ("hsi_close",             "state"),
     "visitors_count":       ("visitors_count",        "state"),
+    "air_quality_index":    ("air_quality_index",     "state"),
     "typhoon_warning":      ("typhoon_warning_level", "condition"),
     "rainstorm_warning":    ("rainstorm_warning_level", "condition"),
     "unemployment_rate":    ("unemployment_rate",     "condition"),
