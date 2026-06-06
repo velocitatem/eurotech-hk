@@ -73,6 +73,8 @@ SDM_ATTR_MAP: dict[tuple[str, str], tuple[str, str]] = {
     ("WeatherForecast",     "windSpeed"):                ("wind_forecast",        "condition"),
     ("WeatherForecast",     "weatherType"):              ("weather_alert_level",  "condition"),
     ("ParkingSpot",         "occupancyRate"):            ("parking_occupancy",    "state"),
+    ("CrowdFlowObserved",   "passengerCount"):           ("visitors_count",        "state"),
+    ("CrowdFlowObserved",   "hkResidents"):              ("visitors_count",        "state"),  # sub-field; primary key is passengerCount
 }
 
 # Non-SDM schema_type → (feature_name, group) — loader passes feature dicts directly

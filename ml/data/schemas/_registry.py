@@ -24,4 +24,9 @@ SCHEMA_REGISTRY: dict[str, dict] = {
         "source_repo": "smart-data-models/dataModel.Parking",
         "commit": "be8db6f7ae5a",
     },
+    "CrowdFlowObserved": {
+        "path": _HERE / "CrowdFlowObserved" / "schema.json",
+        "source_repo": "eurotech-hk/dataModel.Immigration",
+        "commit": "local",
+    },
 }
