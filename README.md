@@ -1,160 +1,127 @@
-# Dstack
+# UrbanJEPA — Hong Kong City-State Forecasting
 
-Template for any project: SaaS webapp, API server, ML pipeline, scraper, CLI, or background worker. AI-native, platform-agnostic, managed via Makefile + Nx.
+UrbanJEPA is a self-supervised latent world model project for forecasting how Hong Kong evolves under different future conditions.
 
-## Quick Start
+Core idea:
+
+```text
+past city state + future conditions → predicted future city state
+X_context + C_future → z_future_pred → Ŷ_future
+```
+
+This project is for **conditional scenario forecasting**, not causal simulation.
+
+## Why this project exists
+
+The goal is to ingest heterogeneous Hong Kong signals (traffic, weather, parking, energy, macroeconomic conditions, etc.), align them into a shared spatiotemporal tensor, and learn a compact latent representation that can answer:
+
+> “Given conditions like these, how did the city historically tend to respond?”
+
+Planned scenario comparisons use:
+
+```text
+Ŷ_scenario - Ŷ_baseline = estimated city reaction
+```
+
+## Data scope (Hong Kong-first)
+
+In-scope sources include:
+- Traffic flow
+- Weather, observed and forecast
+- Parking
+- Air quality
+- Energy demand/production
+- Hospital occupancy
+- Crime
+- Retail activity
+- Visitors arrival
+- Typhoon/rainstorm signals
+- Hang Seng Index
+- Oil prices, unemployment, and other macro indicators
+
+Global series with no zone dimension are broadcast to all zones in condition tensors.
+
+## Architecture overview
+
+```text
+Source loaders (ml/data/loaders/)
+  ↓
+SDM validation for pinned schema-backed types
+  ↓
+Canonical long observation table
+  ↓
+Regularized hourly zone panel
+  ↓
+Windowed tensors (X_context, C_future, Y_target, static, masks)
+  ↓
+UrbanJEPA model (ml/models/arch.py)
+  ↓
+Decoded forecasts Ŷ[batch, horizon, zone, feature]
+  ↓
+Scenario delta analysis
+```
+
+## Tensor contract
+
+- `X_context`: 7-day lookback of state features plus missing/quality channels
+- `C_future`: future condition timeline used for forecasting
+- `Y_target`: supervised future target block
+- `static`: zone-level invariant context
+
+Feature definitions and index contracts live in `ml/data/feature_spec.py` as the single source of truth.
+
+## Current implementation status
+
+Implemented:
+- Core feature registry (`ml/data/feature_spec.py`)
+- Pinned Smart Data Models schemas (`ml/data/schemas/`)
+- Resumable ETL orchestration (`ml/data/etl.py`, `ml/data/cache.py`)
+- Loader abstraction and auto-registry (`ml/data/loaders/base.py`, `registry.py`)
+- UrbanJEPA architecture (`ml/models/arch.py`)
+- JEPA-style training loop with EMA target encoder (`ml/models/train.py`)
+
+Still in progress:
+- Full real-source loaders and the remaining ETL stages (validation, entity flattening, and panel regularization)
+- Evaluation and baseline modules
+- Inference/scenario engine completion in `ml/inference.py`
+- Expanded unit test coverage
+
+## Run the ML pipeline
 
 ```bash
-cp .env.example .env        # fill in NAME and any keys you need
-make init                   # uv venv + sync + env linking
-make dev                    # Next.js webapp at http://localhost:3000
-make nx.projects            # list Nx projects in the monorepo
+# ETL (build dataset windows)
+uv run python -m ml.data.etl
+
+# Train UrbanJEPA
+uv run python -m ml.models.train
+
+# Serve inference API (after inference.py scenario engine is ready)
+# Default training output: ml/models/weights/model.pt
+ML_LATEST_WEIGHTS_PATH=ml/models/weights/model.pt uv run uvicorn ml.inference:app --port 8000
 ```
 
-For Docker services (redis, ml inference, worker):
-```bash
-make up
-```
+## Repository structure
 
-## Directory
-
-```
-apps/
-  webapp/          Next.js 15 + React 19 + Tailwind 4 + Supabase auth (Bun, Turbopack)
-  webapp-minimal/  Streamlit quick prototype
-  backend/
-    fastapi/       FastAPI server (set BACKEND_MODE=fastapi)
-    flask/         Flask server  (set BACKEND_MODE=flask)
-  worker/          Celery background worker backed by Redis
+```text
 ml/
-  configs/         YAML config for data + training hyperparameters
-  models/          arch.py (architecture) + train.py (training loop)
-  data/            etl.py + processed artifacts
-  inference.py     FastAPI inference server
-  notebooks/       Jupyter notebooks
-dlib/          Shared Python utilities (tracing, scraper, agent)
-src/               Simple scripts / CLI entry points
+  data/          ETL pipeline, schema validation, loaders, processed artifacts
+  models/        UrbanJEPA architecture + training loop
+  inference.py   Scenario inference API (stub/in progress)
+
+apps/
+  webapp/        Next.js app
+  backend/       FastAPI and Flask services
+  worker/        Celery worker
+
+dlib/            Shared Python utilities
 ```
 
-## Make Targets
+## Design principles
 
-| Target | Description |
-|--------|-------------|
-| `make init` | First-time setup |
-| `make dev` | Start Next.js webapp |
-| `make up` | Start Docker core services |
-| `make run.backend` | Start API backend |
-| `make run.worker` | Start Celery worker |
-| `make nx.graph` | Open Nx project graph |
-| `make nx.affected` | Run lint/test/build for affected projects |
-| `make lift.minio` | Start MinIO object storage |
-| `make lift.logging` | Start Loki + Grafana |
-| `make lift.mlflow` | Start optional MLflow server |
-| `make lift.database` | Start Postgres / MongoDB |
-| `make doctor` | Verify toolchain |
+- Real data sources plug in via loader subclasses, without ETL rewrites
+- SDM validation is applied where schema-backed contracts exist
+- Leakage boundaries (observed vs forecast features) are explicitly encoded
+- Latent JEPA objective and decoder reconstruction objective are separated
+- Claims remain conditional and data-grounded (no causal overstatement)
 
-Run `make help` for the full list.
-
-## Nx Workspace
-
-This template now ships with Nx project definitions for:
-
-- `webapp` (`apps/webapp`)
-- `webapp-minimal` (`apps/webapp-minimal`)
-- `backend-fastapi` (`apps/backend/fastapi`)
-- `backend-flask` (`apps/backend/flask`)
-- `worker` (`apps/worker`)
-- `ml` (`ml`)
-- `dlib` (`dlib`)
-
-Common commands:
-
-```bash
-bun x nx show projects
-bun x nx graph
-bun x nx run webapp:dev
-bun x nx affected -t lint,test,build
-```
-
-## AI Agent Capacity
-
-Set `ANTHROPIC_API_KEY` in `.env`. Then use:
-
-```python
-from dlib import ask, stream, Agent
-
-# One-shot
-print(ask("Summarize this data: ..."))
-
-# Streaming
-for chunk in stream("Write a Celery task that ..."):
-    print(chunk, end="", flush=True)
-
-# Multi-turn
-agent = Agent(system="You are a senior Python developer.")
-agent.chat("Scaffold a FastAPI endpoint for user profiles")
-agent.chat("Add input validation and error handling")
-```
-
-Claude Code slash commands (type `/` in a Claude Code session):
-- `/plan` - implementation plan for an idea within this boilerplate
-- `/build` - implement a feature end-to-end
-- `/api` - scaffold a new backend endpoint
-- `/page` - scaffold a new Next.js page
-- `/review` - code review of recent changes
-- `/ship` - stage and commit changes
-
-## Tracing (OpenTelemetry)
-
-```python
-from dlib import configure_tracing, get_tracer
-
-configure_tracing("service")
-tracer = get_tracer(__name__)
-
-with tracer.start_as_current_span("pipeline.run"):
-    ...
-```
-
-By default spans print to console. To export traces to an OTLP backend (Tempo, Jaeger, Honeycomb, Datadog, etc.), set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example: `http://localhost:4318`).
-
-## Python Packaging
-
-Python dependencies are managed with `pyproject.toml` and `uv`.
-
-```bash
-make deps         # uv sync
-make lock         # refresh uv.lock
-uv run pytest -v
-```
-
-## ML Workflow
-
-High-level ML hyperparameters live in YAML configs:
-
-- `ml/configs/data/default.yaml`
-- `ml/configs/train/default.yaml`
-
-Run with Nx targets (cacheable with explicit inputs/outputs):
-
-```bash
-bun x nx run ml:etl
-bun x nx run ml:train
-```
-
-`ml:train` depends on `ml:etl`, and both targets cache artifacts in `ml/data/processed`, `ml/models/weights`, and `ml/tensorboard`.
-
-## Services (docker compose profiles)
-
-| Profile | Services | Command |
-|---------|----------|---------|
-| _(default)_ | redis, ml-inference, worker | `make up` |
-| `minio` | + MinIO object storage | `make lift.minio` |
-| `tensorboard` | + TensorBoard | `make lift.tensorboard` |
-| `mlflow` | + MLflow tracking server (optional) | `make lift.mlflow` |
-| `logging` | + Loki + Grafana | `make lift.logging` |
-| `database` | + Postgres + MongoDB | `make lift.database` |
-
-## Webapp Auth
-
-Auth is off by default (`NEXT_PUBLIC_REQUIRE_AUTH=false`). Set it to `true` and configure Supabase keys to enable session-based auth gating across all routes.
+For the full technical vision and detailed roadmap, see `IDEA.md`.
