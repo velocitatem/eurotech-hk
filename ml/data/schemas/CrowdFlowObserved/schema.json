@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schemaVersion": "0.0.1",
+  "$id": "urn:eurotech:dataModel.Immigration:CrowdFlowObserved:schema",
+  "title": "Immigration / CrowdFlowObserved",
+  "description": "Daily passenger movement at a Hong Kong immigration control point, sourced from IMMD open data.",
+  "type": "object",
+  "properties": {
+    "id":          { "type": "string" },
+    "type":        { "type": "string", "enum": ["CrowdFlowObserved"] },
+    "dateObserved": {
+      "type": "string",
+      "format": "date",
+      "description": "Calendar date of the observation (YYYY-MM-DD)."
+    },
+    "controlPoint": {
+      "type": "string",
+      "description": "Name of the immigration control point as used by IMMD."
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["Arrival", "Departure"],
+      "description": "Passenger movement direction."
+    },
+    "passengerCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total passengers (all categories) at this control point for this direction on this date."
+    },
+    "hkResidents": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Hong Kong resident count within passengerCount."
+    },
+    "mainlandVisitors": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Mainland China visitor count within passengerCount."
+    },
+    "otherVisitors": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "All other visitor count within passengerCount."
+    },
+    "zoneId": {
+      "type": "string",
+      "description": "Model zone identifier this control point is mapped to."
+    }
+  },
+  "required": ["id", "type", "dateObserved", "controlPoint", "direction", "passengerCount"]
+}

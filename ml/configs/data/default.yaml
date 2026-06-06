@@ -1,6 +1,28 @@
-dataset_name: synthetic_classification
-output_dir: ml/data/processed
-train_samples: 2048
-input_dim: 16
-num_classes: 3
-seed: 42
+dataset_name: urban_jepa_real
+
+# city grid
+n_zones: 8
+zone_ids:
+  - zone_0
+  - zone_1
+  - zone_2
+  - zone_3
+  - zone_4
+  - zone_5
+  - zone_6
+  - zone_7
+
+# date range — all R2 datasets (HSI, petrol) start 2024-06-05; hospital + weather cover all dates
+start_date: "2024-06-05"
+total_hours: 17544   # ~2 years (to 2026-06-04)
+
+# time series config (all units: hours)
+context_len: 168       # 7-day lookback
+horizon:     120       # 5 days ahead before target block
+target_len:  24        # 24-hour prediction target
+stride:      6         # window stride
+
+# splits
+train_frac:  0.70
+val_frac:    0.15
+split_gap_hours: 168   # 1-week gap between splits

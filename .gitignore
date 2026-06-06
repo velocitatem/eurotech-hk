@@ -9,3 +9,8 @@ logs/
 FLAT.xml
 **/package-lock.json
 .nx/
+**/.cache/
+**/weights/
+**/tensorboard/
+ml/data/processed/
+**/*.pt
