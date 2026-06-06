@@ -1,0 +1,35 @@
+# Legacy fallback only. Primary deps live in pyproject.toml.
+# Core - always installed
+python-dotenv
+requests
+tqdm
+
+# Tracing (OpenTelemetry)
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+
+# Backend (fastapi or flask)
+fastapi
+flask
+flask-cors
+uvicorn[standard]
+pydantic
+
+# Worker (Celery + Redis)
+celery[redis]
+redis
+
+# Scraper (dlib)
+seleniumbase
+beautifulsoup4
+
+# Minimal webapp
+streamlit
+
+# AI / Agent SDK
+anthropic
+
+# ML (heavy - comment out if not needed)
+torch
+tensorboard

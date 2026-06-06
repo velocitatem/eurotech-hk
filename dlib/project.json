@@ -1,0 +1,32 @@
+{
+  "name": "dlib",
+  "root": "dlib",
+  "sourceRoot": "dlib",
+  "projectType": "library",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "python3.12 -m compileall dlib"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": ".venv/bin/ruff check dlib"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": ".venv/bin/mypy dlib"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": ".venv/bin/pytest dlib -v"
+      }
+    }
+  }
+}
