@@ -125,7 +125,7 @@ class ImmigrationLoader(Loader):
             yield {
                 "schema_type":      self.schema_type,
                 "zone_id":          "global",
-                "timestamp":        row.date.isoformat() + "T00:00:00Z",
+                "timestamp":        row.date.strftime("%Y-%m-%dT00:00:00Z"),
                 "visitors_count":   float(row.visitors_count),
                 "hk_residents":     float(row.hk_residents),
                 "mainland_visitors": float(row.mainland),
