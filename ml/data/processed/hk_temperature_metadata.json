@@ -19,6 +19,5 @@
   ],
   "start": "2024-06-06T00:00",
   "end": "2026-06-06T23:00",
-  "n_records": 17544,
-  "output_path": "ml/data/processed/hk_temperature.csv"
+  "n_records": 17544
 }

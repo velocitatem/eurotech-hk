@@ -3,6 +3,7 @@
 python-dotenv
 requests
 tqdm
+boto3
 
 # Tracing (OpenTelemetry)
 opentelemetry-api
