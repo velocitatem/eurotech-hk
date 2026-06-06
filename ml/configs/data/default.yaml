@@ -1,6 +1,18 @@
-dataset_name: synthetic_classification
-output_dir: ml/data/processed
-train_samples: 2048
-input_dim: 16
-num_classes: 3
+dataset_name: urban_jepa_synthetic
+
+# city grid
+n_zones: 8
+
+# time series config (all units: hours)
+context_len: 168       # 7 days lookback
+horizon:     120       # 5 days ahead before target block
+target_len:  24        # 24-hour prediction target
+stride:      6         # window stride
+
+# data volume (~3.4 years of synthetic hourly data)
+total_hours: 13140
+train_frac:  0.70
+val_frac:    0.15
+split_gap_hours: 168   # 1-week gap between splits to prevent leakage
+
 seed: 42

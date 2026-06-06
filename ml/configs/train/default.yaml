@@ -1,10 +1,25 @@
-input_dim: 16
-hidden_dim: 64
-num_classes: 3
-learning_rate: 0.001
-batch_size: 64
-epochs: 5
+# model
+d_model:     128
+n_zones:     8
+patch_size:  6         # 6-hour patches → 28 patches from 168h context
+max_patches: 64        # supports up to 384h context at patch_size=6
+enc_heads:   4
+enc_layers:  3
+cond_heads:  4
+cond_layers: 2
+target_len:  24
+
+# loss weights
+lambda_raw: 0.5
+lambda_reg: 1.0e-5
+
+# training
+learning_rate:    0.0003
+batch_size:       32
+epochs:           20
+ema_decay:        0.996
 log_every_n_steps: 20
-seed: 42
-tensorboard_dir: ml/tensorboard
-weights_output: ml/models/weights/model.pt
+seed:             42
+
+tensorboard_dir:  ml/tensorboard
+weights_output:   ml/models/weights/model.pt
