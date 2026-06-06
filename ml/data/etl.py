@@ -1,9 +1,15 @@
 import argparse
+import csv
 import json
 from pathlib import Path
 
 import torch
 import yaml
+
+try:
+    from ml.data.openmeteo import fetch_historical, _CACHE as _OM_CACHE
+except ImportError:
+    from openmeteo import fetch_historical, _CACHE as _OM_CACHE  # type: ignore[no-redef]
 
 
 def build_dataset(
@@ -15,18 +21,56 @@ def build_dataset(
     return {"features": features, "labels": labels}
 
 
+def build_weather_dataset(output_dir: Path, cache_dir: Path | None = None) -> dict:
+    out_csv = output_dir / "hk_temperature.csv"
+    out_meta = output_dir / "hk_temperature_metadata.json"
+    if out_csv.exists() and out_meta.exists():
+        return json.loads(out_meta.read_text())
+
+    raw = fetch_historical(cache_dir=cache_dir or _OM_CACHE)
+    cols = list(raw["hourly"].keys())  # ["time", "temperature_2m", "rain", ...]
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_csv, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        w.writerows(zip(*[raw["hourly"][c] for c in cols]))
+
+    times = raw["hourly"]["time"]
+    meta = {
+        "source": "open-meteo-archive",
+        "latitude": raw["latitude"],
+        "longitude": raw["longitude"],
+        "timezone": raw["timezone"],
+        "units": raw["hourly_units"],
+        "variables": cols,
+        "start": times[0],
+        "end": times[-1],
+        "n_records": len(times),
+        "output_path": str(out_csv),
+    }
+    out_meta.write_text(json.dumps(meta, indent=2))
+    return meta
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build a synthetic training dataset")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", choices=["synthetic", "weather"], default="synthetic")
     parser.add_argument("--config", default="ml/configs/data/default.yaml")
     parser.add_argument("--output", default="ml/data/processed")
     args = parser.parse_args()
 
+    output_dir = Path(args.output)
+
+    if args.source == "weather":
+        meta = build_weather_dataset(output_dir)
+        print(f"Exported {meta['n_records']} records → {meta['output_path']}")
+        return
+
     with open(args.config, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
-    output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
-
     dataset = build_dataset(
         train_samples=int(cfg["train_samples"]),
         input_dim=int(cfg["input_dim"]),
