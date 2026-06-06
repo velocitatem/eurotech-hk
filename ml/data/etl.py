@@ -44,11 +44,11 @@ from ml.data.loaders.base import Loader
 try:
     from ml.data.openmeteo import fetch_historical, _CACHE as _OM_CACHE
     from ml.data.storage import Storage, make_storage
-    from ml.data import ha_hospitals, centanet, aed, hkma
+    from ml.data import ha_hospitals, centanet, aed, hkma, hkfp
 except ImportError:
     from openmeteo import fetch_historical, _CACHE as _OM_CACHE  # type: ignore[no-redef]
     from storage import Storage, make_storage  # type: ignore[no-redef]
-    import ha_hospitals, centanet, aed, hkma  # type: ignore[no-redef]
+    import ha_hospitals, centanet, aed, hkma, hkfp  # type: ignore[no-redef]
 
 logger = get_logger("ml-etl")
 
@@ -344,9 +344,9 @@ def build_aed_dataset(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source", choices=["synthetic", "weather", "hospitals", "cci", "aed", "hkma"], default="synthetic")
+    parser.add_argument("--source", choices=["synthetic", "weather", "hospitals", "cci", "aed", "hkma", "hkfp"], default="synthetic")
     parser.add_argument("--days", type=int, default=730, help="history window for aed (default 730 = 2 years)")
-    parser.add_argument("--workers", type=int, default=8, help="concurrent fetch workers for aed")
+    parser.add_argument("--workers", type=int, default=8, help="concurrent fetch workers (aed, hkfp)")
     parser.add_argument("--rate", type=float, default=0.1, help="seconds between request submissions for aed")
     parser.add_argument("--storage", choices=["local", "r2", "both"], default="local")
     parser.add_argument("--config", default="ml/configs/data/default.yaml")
@@ -367,6 +367,15 @@ def main() -> None:
         buf = io.StringIO()
         df.to_csv(buf, index=False)
         storage.put("hk_hkma_interbank_liquidity.csv", buf.getvalue())
+        print(f"Exported {len(df)} rows via {args.storage}")
+        return
+
+    if args.source == "hkfp":
+        storage = make_storage(args.storage, output_dir)
+        df = hkfp.fetch_headlines(days=args.days, workers=args.workers)
+        buf = io.StringIO()
+        df.to_csv(buf, index=False)
+        storage.put("hk_hkfp_headlines.csv", buf.getvalue())
         print(f"Exported {len(df)} rows via {args.storage}")
         return
 
