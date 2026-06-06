@@ -1,18 +1,28 @@
-dataset_name: urban_jepa_synthetic
+dataset_name: urban_jepa_real
 
 # city grid
 n_zones: 8
+zone_ids:
+  - zone_0
+  - zone_1
+  - zone_2
+  - zone_3
+  - zone_4
+  - zone_5
+  - zone_6
+  - zone_7
+
+# date range — immigration data is available from 2021 onward
+start_date: "2021-01-01"
+total_hours: 26280   # ~3 years (to end of 2023)
 
 # time series config (all units: hours)
-context_len: 168       # 7 days lookback
+context_len: 168       # 7-day lookback
 horizon:     120       # 5 days ahead before target block
 target_len:  24        # 24-hour prediction target
 stride:      6         # window stride
 
-# data volume (~3.4 years of synthetic hourly data)
-total_hours: 13140
+# splits
 train_frac:  0.70
 val_frac:    0.15
-split_gap_hours: 168   # 1-week gap between splits to prevent leakage
-
-seed: 42
+split_gap_hours: 168   # 1-week gap between splits
