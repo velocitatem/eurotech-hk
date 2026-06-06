@@ -33,7 +33,7 @@ import yaml
 from dlib import get_logger
 from ml.data.feature_spec import (
     N_STATE, N_COND, N_STATIC,
-    STATE_IDX, COND_IDX, NON_SDM_FEATURE_MAP,
+    STATE_IDX, COND_IDX, NON_SDM_FEATURE_MAP, SDM_ATTR_MAP,
 )
 from ml.data.cache import load_or_run
 from ml.data.loaders.registry import get_all_loaders
@@ -49,6 +49,30 @@ except ImportError:
 logger = get_logger("ml-etl")
 
 
+def _state_features(loader: Loader) -> list[tuple[str, int]]:
+    """(record_key, state_idx) pairs for this loader's state-group features."""
+    if loader.schema_type in NON_SDM_FEATURE_MAP:
+        ft, grp = NON_SDM_FEATURE_MAP[loader.schema_type]
+        return [(ft, STATE_IDX[ft])] if grp == "state" and ft in STATE_IDX else []
+    return [
+        (attr, STATE_IDX[ft])
+        for (stype, attr), (ft, grp) in SDM_ATTR_MAP.items()
+        if stype == loader.schema_type and grp == "state" and ft in STATE_IDX
+    ]
+
+
+def _cond_features(loader: Loader) -> list[tuple[str, int]]:
+    """(record_key, cond_idx) pairs for this loader's condition-group features."""
+    if loader.schema_type in NON_SDM_FEATURE_MAP:
+        ft, grp = NON_SDM_FEATURE_MAP[loader.schema_type]
+        return [(ft, COND_IDX[ft])] if grp == "condition" and ft in COND_IDX else []
+    return [
+        (attr, COND_IDX[ft])
+        for (stype, attr), (ft, grp) in SDM_ATTR_MAP.items()
+        if stype == loader.schema_type and grp == "condition" and ft in COND_IDX
+    ]
+
+
 def _time_encodings(timestamps: pd.DatetimeIndex) -> np.ndarray:
     """Cyclical hour/DOW encodings anchored to real timestamps, shape [T, 4]."""
     h, d = timestamps.hour.values, timestamps.dayofweek.values
@@ -58,13 +82,46 @@ def _time_encodings(timestamps: pd.DatetimeIndex) -> np.ndarray:
     ], axis=-1).astype(np.float32)
 
 
+def _fill_panel(
+    arrays: tuple[np.ndarray, np.ndarray, np.ndarray],
+    feats: list[tuple[str, int]],
+    records,
+    ts_to_h: dict,
+    z_to_i: dict,
+    n_zones: int,
+    state: bool,
+) -> int:
+    values, masks, quality = arrays
+    n_rec = 0
+    for rec in records:
+        zone = rec["zone_id"]
+        zs   = list(range(n_zones)) if zone == "global" else \
+               [z_to_i[zone]] if zone in z_to_i else []
+        if not zs:
+            continue
+        t0 = pd.Timestamp(rec["timestamp"]).replace(tzinfo=None)
+        hs = ([ts_to_h[t0 + pd.Timedelta(hours=h)]
+               for h in range(24) if (t0 + pd.Timedelta(hours=h)) in ts_to_h]
+              if t0.hour == 0 else
+              [ts_to_h[t0]] if t0 in ts_to_h else [])
+        for h in hs:
+            for z in zs:
+                for key, fi in feats:
+                    if key in rec:
+                        values[h, z, fi] = float(rec[key])
+                        if state:
+                            masks[h, z, fi]   = True
+                            quality[h, z, fi] = 1.0
+        n_rec += 1
+    return n_rec
+
+
 def _build_panel(
     loaders: list[Loader],
     timestamps: pd.DatetimeIndex,
     n_zones: int,
     zone_ids: list[str],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Populate [T, Z, N_STATE] arrays from real loader records."""
     n_hours = len(timestamps)
     ts_to_h = {ts: i for i, ts in enumerate(timestamps)}
     z_to_i  = {z: i for i, z in enumerate(zone_ids)}
@@ -75,46 +132,47 @@ def _build_panel(
     quality = np.zeros((n_hours, n_zones, N_STATE), np.float32)
 
     for loader in loaders:
-        ft, grp = NON_SDM_FEATURE_MAP.get(loader.schema_type, (None, None))
-        if ft not in STATE_IDX or grp != "state":
+        feats = _state_features(loader)
+        if not feats:
             logger.debug(f"skip loader={loader.loader_id} (no state mapping)")
             continue
-        fi, n_rec = STATE_IDX[ft], 0
-
-        for rec in loader.fetch(start, end, zone_ids):
-            val  = float(rec.get(ft, 0.0))
-            zone = rec["zone_id"]
-            zs   = list(range(n_zones)) if zone == "global" else \
-                   [z_to_i[zone]] if zone in z_to_i else []
-            if not zs:
-                continue
-
-            t0 = pd.Timestamp(rec["timestamp"]).replace(tzinfo=None)
-            # daily record (midnight) → fill all 24 hours
-            hs = ([ts_to_h[t0 + pd.Timedelta(hours=h)]
-                   for h in range(24)
-                   if (t0 + pd.Timedelta(hours=h)) in ts_to_h]
-                  if t0.hour == 0 else
-                  [ts_to_h[t0]] if t0 in ts_to_h else [])
-
-            for h in hs:
-                for z in zs:
-                    values[h, z, fi]  = val
-                    masks[h, z, fi]   = True
-                    quality[h, z, fi] = 1.0
-            n_rec += 1
-
-        logger.info(f"loader={loader.loader_id} feature={ft} records={n_rec}")
+        n = _fill_panel((values, masks, quality), feats,
+                        loader.fetch(start, end, zone_ids),
+                        ts_to_h, z_to_i, n_zones, state=True)
+        logger.info(f"loader={loader.loader_id} state_records={n}")
 
     return values, masks, quality
 
 
-def _build_cond(timestamps: pd.DatetimeIndex, n_zones: int) -> np.ndarray:
-    """[T, Z, N_COND] panel — time encodings always populated; rest zero until loaders added."""
+def _build_cond(
+    timestamps: pd.DatetimeIndex,
+    n_zones: int,
+    zone_ids: list[str],
+    loaders: list[Loader] | None = None,
+) -> np.ndarray:
+    """[T, Z, N_COND] panel — time encodings always present; condition loaders fill the rest."""
     cond = np.zeros((len(timestamps), n_zones, N_COND), np.float32)
     enc  = _time_encodings(timestamps)
     for ci, name in enumerate(("hour_sin", "hour_cos", "dow_sin", "dow_cos")):
         cond[:, :, COND_IDX[name]] = enc[:, ci, None]
+
+    if not loaders:
+        return cond
+
+    ts_to_h = {ts: i for i, ts in enumerate(timestamps)}
+    z_to_i  = {z: i for i, z in enumerate(zone_ids)}
+    start, end = timestamps[0].isoformat(), timestamps[-1].isoformat()
+    # reuse _fill_panel with the cond array; masks/quality placeholders unused here
+    _unused = np.empty(0), np.empty(0)
+    for loader in loaders:
+        feats = _cond_features(loader)
+        if not feats:
+            continue
+        n = _fill_panel((cond, *_unused), feats,
+                        loader.fetch(start, end, zone_ids),
+                        ts_to_h, z_to_i, n_zones, state=False)
+        logger.info(f"loader={loader.loader_id} cond_records={n}")
+
     return cond
 
 
@@ -187,7 +245,7 @@ def build_dataset(cfg: dict, output_dir: Path, cache_dir: Path) -> Path:
     def _build() -> dict:
         logger.info(f"building panel: start={start_date} n_hours={n_hours} loaders={[l.loader_id for l in loaders]}")
         values, masks, quality = _build_panel(loaders, timestamps, n_zones, zone_ids)
-        cond = _build_cond(timestamps, n_zones)
+        cond = _build_cond(timestamps, n_zones, zone_ids, loaders)
 
         train_end = int(n_hours * train_frac)
         val_end   = int(n_hours * (train_frac + val_frac))

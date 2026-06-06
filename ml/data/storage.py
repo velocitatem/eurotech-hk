@@ -5,6 +5,7 @@ from typing import Protocol
 
 class Storage(Protocol):
     def put(self, key: str, content: str | bytes) -> None: ...
+    def get(self, key: str) -> bytes: ...
     def exists(self, key: str) -> bool: ...
 
 
@@ -16,6 +17,9 @@ class LocalStorage:
         p = self.base / key
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(content.encode() if isinstance(content, str) else content)
+
+    def get(self, key: str) -> bytes:
+        return (self.base / key).read_bytes()
 
     def exists(self, key: str) -> bool:
         return (self.base / key).exists()
@@ -40,6 +44,9 @@ class R2Storage:
             Body=content.encode() if isinstance(content, str) else content,
         )
 
+    def get(self, key: str) -> bytes:
+        return self._s3.get_object(Bucket=self._bucket, Key=key)["Body"].read()
+
     def exists(self, key: str) -> bool:
         from botocore.exceptions import ClientError
         try:
@@ -57,8 +64,14 @@ class _MultiStorage:
         for s in self._stores:
             s.put(key, content)
 
+    def get(self, key: str) -> bytes:
+        for s in self._stores:
+            if s.exists(key):
+                return s.get(key)
+        raise FileNotFoundError(key)
+
     def exists(self, key: str) -> bool:
-        return all(s.exists(key) for s in self._stores)
+        return any(s.exists(key) for s in self._stores)
 
 
 def make_storage(

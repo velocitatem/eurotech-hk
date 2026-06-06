@@ -12,9 +12,9 @@ zone_ids:
   - zone_6
   - zone_7
 
-# date range — immigration data is available from 2021 onward
-start_date: "2021-01-01"
-total_hours: 26280   # ~3 years (to end of 2023)
+# date range — all R2 datasets (HSI, petrol) start 2024-06-05; hospital + weather cover all dates
+start_date: "2024-06-05"
+total_hours: 17544   # ~2 years (to 2026-06-04)
 
 # time series config (all units: hours)
 context_len: 168       # 7-day lookback
