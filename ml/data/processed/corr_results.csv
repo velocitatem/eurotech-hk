@@ -1,0 +1,4 @@
+granularity,weather_var,target_var,n,xi,spearman,spearman_p
+weekly,wind_speed_10m,cci,104,0.0097,-0.0426,0.6674
+weekly,temperature_2m,cci,104,0.0058,-0.1214,0.2198
+weekly,rain,cci,104,-0.0117,-0.141,0.1532
