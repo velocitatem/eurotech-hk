@@ -43,22 +43,15 @@ Global series with no zone dimension are broadcast to all zones in condition ten
 
 ## Architecture overview
 
-```text
-Source loaders (ml/data/loaders/)
-  ↓
-SDM validation for pinned schema-backed types
-  ↓
-Canonical long observation table
-  ↓
-Regularized hourly zone panel
-  ↓
-Windowed tensors (X_context, C_future, Y_target, static, masks)
-  ↓
-UrbanJEPA model (ml/models/arch.py)
-  ↓
-Decoded forecasts Ŷ[batch, horizon, zone, feature]
-  ↓
-Scenario delta analysis
+```mermaid
+flowchart TD
+    A[Source loaders<br/>ml/data/loaders/] --> B[SDM validation<br/>for pinned schema-backed types]
+    B --> C[Canonical long observation table]
+    C --> D[Regularized hourly zone panel]
+    D --> E[Windowed tensors<br/>X_context, C_future, Y_target, static, masks]
+    E --> F[UrbanJEPA model<br/>ml/models/arch.py]
+    F --> G[Decoded forecasts<br/>Ŷ batch × horizon × zone × feature]
+    G --> H[Scenario delta analysis]
 ```
 
 ## Tensor contract
