@@ -1,8 +1,24 @@
-"""UrbanJEPA: city-scale latent world model (spec §13-16).
+"""UrbanJEPA: city-scale latent world model.
 
-Tensor conventions throughout:
-    B = batch, L = context time steps, T = target time steps,
-    Lc = condition time steps, Z = zones, d = d_model
+JEPA dynamics:
+    S_future = f(S_past, A_transition)
+
+where A_transition is a free-form text description of events, policies,
+shocks, or planned activity during the transition window.
+
+    S_context ──▶ CityEncoder      ──▶ z_ctx
+    text/news  ──▶ TextCondEncoder  ──▶ a_text
+    z_ctx + a_text ──▶ Predictor   ──▶ z_pred
+    z_pred ──▶ Decoder             ──▶ ŷ_state
+
+Target encoder is an EMA copy of CityEncoder (no-grad, updated after each step).
+Text embeddings are pre-computed offline via Qwen3-Embedding-0.6B (text_dim=1024).
+During initial training with no labelled text, pass zeros — the model learns to be
+informative when text is present and degrades gracefully when absent.
+
+Tensor conventions:
+    B = batch, L = context steps, T = target steps,
+    Z = zones, d = d_model, E = text_dim
 """
 from __future__ import annotations
 import copy
@@ -10,7 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ml.data.feature_spec import N_STATE, N_COND, N_STATIC, DECODER_DOMAINS
+from ml.data.feature_spec import N_STATE, N_STATIC, DECODER_DOMAINS
 
 
 # ---------------------------------------------------------------------------
@@ -34,83 +50,77 @@ class _TransformerStack(nn.Module):
 
 
 class _PatchEncoder(nn.Module):
-    """PatchTST-style: fold T into non-overlapping patches → transformer → mean pool.
-
-    Handles variable-length sequences (different number of patches per call).
-    """
+    """PatchTST-style: fold T into non-overlapping patches → transformer → mean pool."""
     def __init__(self, d: int, patch_size: int, max_patches: int, heads: int, layers: int) -> None:
         super().__init__()
-        self.P = patch_size
+        self.P          = patch_size
         self.patch_proj = nn.Linear(d * patch_size, d)
         self.pos_embed  = nn.Embedding(max_patches, d)
         self.tf         = _TransformerStack(d, heads, layers)
         self.norm       = nn.LayerNorm(d)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [N, T, d]  where N = B*Z
         N, T, d = x.shape
         P = self.P
         n = T // P
         x = x[:, :n * P].reshape(N, n, P * d)
         x = self.patch_proj(x)
         x = x + self.pos_embed(torch.arange(n, device=x.device))
-        x = self.tf(x)
-        return self.norm(x.mean(1))   # [N, d]
+        return self.norm(self.tf(x).mean(1))   # [N, d]
 
 
 # ---------------------------------------------------------------------------
-# encoder
+# city encoder (shared between online + EMA target branch)
 # ---------------------------------------------------------------------------
 
 class CityEncoder(nn.Module):
-    """Encodes observed city-state windows.
+    """Encodes observed city-state windows → latent [B, Z, d].
 
-    Input:  values  [B, L, Z, N_STATE]  (z-score normalised)
-            masks   [B, L, Z, N_STATE]  bool, True = observed
+    Input:  values  [B, L, Z, N_STATE]
+            masks   [B, L, Z, N_STATE]  bool — True = observed
             quality [B, L, Z, N_STATE]  float 0-1
-    Output: z       [B, Z, d]
     """
     def __init__(self, d: int, n_zones: int, patch_size: int, max_patches: int,
                  heads: int, layers: int) -> None:
         super().__init__()
-        self.input_proj = nn.Linear(N_STATE * 3, d)   # (value, mask, quality) per feature
+        self.input_proj = nn.Linear(N_STATE * 3, d)
         self.zone_embed = nn.Embedding(n_zones, d)
         self.temporal   = _PatchEncoder(d, patch_size, max_patches, heads, layers)
 
     def forward(self, values: torch.Tensor, masks: torch.Tensor, quality: torch.Tensor) -> torch.Tensor:
         B, L, Z, _ = values.shape
         x = torch.cat([values, masks.float(), quality], dim=-1)   # [B, L, Z, N_STATE*3]
-        x = self.input_proj(x)                                     # [B, L, Z, d]
+        x = self.input_proj(x)
         x = x + self.zone_embed(torch.arange(Z, device=x.device))
-        x = x.permute(0, 2, 1, 3).reshape(B * Z, L, -1)          # [B*Z, L, d]
+        x = x.permute(0, 2, 1, 3).reshape(B * Z, L, -1)
         z = self.temporal(x)                                        # [B*Z, d]
         return z.reshape(B, Z, -1)                                  # [B, Z, d]
 
 
 # ---------------------------------------------------------------------------
-# condition encoder
+# text condition encoder
 # ---------------------------------------------------------------------------
 
-class ConditionEncoder(nn.Module):
-    """Encodes future conditions.
+class TextConditionEncoder(nn.Module):
+    """Projects pre-computed sentence embeddings → latent action token.
 
-    Input:  cond [B, Lc, Z, N_COND]
-    Output: z    [B, Z, d]
+    Input:  text_emb [B, text_dim]   — sentence embedding (zeros = no-text)
+    Output: a_text   [B, d_model]    — single global action vector
+
+    The action token is global (one per batch item, not per zone). The predictor
+    broadcasts it across zones before fusion so each zone sees the same event
+    context but combines it with its own latent trajectory.
     """
-    def __init__(self, d: int, n_zones: int, heads: int, layers: int) -> None:
+    def __init__(self, text_dim: int, d_model: int) -> None:
         super().__init__()
-        self.proj       = nn.Linear(N_COND, d)
-        self.zone_embed = nn.Embedding(n_zones, d)
-        self.tf         = _TransformerStack(d, heads, layers)
-        self.norm       = nn.LayerNorm(d)
+        self.net = nn.Sequential(
+            nn.Linear(text_dim, d_model), nn.GELU(),
+            nn.Linear(d_model, d_model),
+        )
+        self.norm = nn.LayerNorm(d_model)
 
-    def forward(self, cond: torch.Tensor) -> torch.Tensor:
-        B, Lc, Z, _ = cond.shape
-        x = self.proj(cond)
-        x = x + self.zone_embed(torch.arange(Z, device=x.device))
-        x = x.permute(0, 2, 1, 3).reshape(B * Z, Lc, -1)
-        x = self.tf(x).mean(1)     # [B*Z, d]
-        return self.norm(x).reshape(B, Z, -1)
+    def forward(self, text_emb: torch.Tensor) -> torch.Tensor:
+        return self.norm(self.net(text_emb))   # [B, d]
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +128,11 @@ class ConditionEncoder(nn.Module):
 # ---------------------------------------------------------------------------
 
 class LatentPredictor(nn.Module):
-    """Fuses context + condition latents → predicted future latent.
+    """Fuses per-zone context latent with global text action → predicted latent.
 
-    Input:  z_ctx  [B, Z, d]
-            z_cond [B, Z, d]
-    Output: z_pred [B, Z, d]
+    z_ctx:  [B, Z, d]  — online encoder output
+    a_text: [B, d]     — text condition encoder output (global)
+    →       [B, Z, d]  — predicted target latent
     """
     def __init__(self, d: int) -> None:
         super().__init__()
@@ -132,8 +142,9 @@ class LatentPredictor(nn.Module):
         )
         self.norm = nn.LayerNorm(d)
 
-    def forward(self, z_ctx: torch.Tensor, z_cond: torch.Tensor) -> torch.Tensor:
-        return self.norm(self.mlp(torch.cat([z_ctx, z_cond], dim=-1)))
+    def forward(self, z_ctx: torch.Tensor, a_text: torch.Tensor) -> torch.Tensor:
+        a = a_text.unsqueeze(1).expand_as(z_ctx)   # [B, d] → broadcast [B, Z, d]
+        return self.norm(self.mlp(torch.cat([z_ctx, a], dim=-1)))
 
 
 # ---------------------------------------------------------------------------
@@ -141,14 +152,10 @@ class LatentPredictor(nn.Module):
 # ---------------------------------------------------------------------------
 
 class DecoderHeads(nn.Module):
-    """Domain-specific heads: z_pred [B, Z, d] → Ŷ [B, T, Z, N_STATE].
-
-    Only features registered in DECODER_DOMAINS are decoded; remaining
-    STATE_FEATURES get zero-filled (loss masked anyway on missing targets).
-    """
+    """Domain heads: z_pred [B, Z, d] → Ŷ [B, T, Z, N_STATE]."""
     def __init__(self, d: int, target_len: int) -> None:
         super().__init__()
-        self.T = target_len
+        self.T     = target_len
         self.heads = nn.ModuleDict({
             domain: nn.Linear(d, target_len * len(indices))
             for domain, indices in DECODER_DOMAINS.items()
@@ -158,7 +165,7 @@ class DecoderHeads(nn.Module):
         B, Z, _ = z.shape
         out = torch.zeros(B, self.T, Z, N_STATE, device=z.device)
         for domain, indices in DECODER_DOMAINS.items():
-            n = len(indices)
+            n    = len(indices)
             pred = self.heads[domain](z).reshape(B, Z, self.T, n).permute(0, 2, 1, 3)
             for j, idx in enumerate(indices):
                 out[:, :, :, idx] = pred[:, :, :, j]
@@ -170,19 +177,18 @@ class DecoderHeads(nn.Module):
 # ---------------------------------------------------------------------------
 
 class UrbanJEPA(nn.Module):
-    """City-scale JEPA latent world model.
+    """City-scale JEPA world model conditioned on free-form text transitions.
 
-    Training call:
+    Training:
         z_pred, z_tgt_sg, y_hat = model(
-            values_ctx, masks_ctx, quality_ctx,
-            cond_future, static,
-            values_tgt, masks_tgt, quality_tgt,
+            values_ctx, masks_ctx, quality_ctx, text_emb, static,
+            values_tgt, masks_tgt,
         )
         loss = latent_loss(z_pred, z_tgt_sg) + λ * masked_mae(y_hat, values_tgt, masks_tgt)
-        model.ema_update(decay)   # after optimizer.step()
+        model.ema_update(decay)
 
-    Inference:
-        z_pred, None, y_hat = model(values_ctx, masks_ctx, quality_ctx, cond_future, static)
+    Inference (no target):
+        z_pred, None, y_hat = model(values_ctx, masks_ctx, quality_ctx, text_emb, static)
     """
 
     def __init__(
@@ -193,8 +199,7 @@ class UrbanJEPA(nn.Module):
         max_patches: int = 64,
         enc_heads:   int = 4,
         enc_layers:  int = 3,
-        cond_heads:  int = 4,
-        cond_layers: int = 2,
+        text_dim:    int = 1024,
         target_len:  int = 24,
     ) -> None:
         super().__init__()
@@ -204,7 +209,7 @@ class UrbanJEPA(nn.Module):
         self.target_encoder = copy.deepcopy(self.city_encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad_(False)
-        self.cond_encoder = ConditionEncoder(d_model, n_zones, cond_heads, cond_layers)
+        self.text_encoder = TextConditionEncoder(text_dim, d_model)
         self.predictor    = LatentPredictor(d_model)
         self.decoder      = DecoderHeads(d_model, target_len)
 
@@ -215,18 +220,18 @@ class UrbanJEPA(nn.Module):
 
     def forward(
         self,
-        values_ctx:  torch.Tensor,
-        masks_ctx:   torch.Tensor,
-        quality_ctx: torch.Tensor,
-        cond_future: torch.Tensor,
-        static:      torch.Tensor,           # [B, Z, N_STATIC] — hook for graph encoder
+        values_ctx:  torch.Tensor,          # [B, L, Z, N_STATE]
+        masks_ctx:   torch.Tensor,          # [B, L, Z, N_STATE] bool
+        quality_ctx: torch.Tensor,          # [B, L, Z, N_STATE]
+        text_emb:    torch.Tensor,          # [B, text_dim]  — zeros if no text
+        static:      torch.Tensor,          # [B, Z, N_STATIC]
         values_tgt:  torch.Tensor | None = None,
         masks_tgt:   torch.Tensor | None = None,
         quality_tgt: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
         z_ctx  = self.city_encoder(values_ctx, masks_ctx, quality_ctx)
-        z_cond = self.cond_encoder(cond_future)
-        z_pred = self.predictor(z_ctx, z_cond)
+        a_text = self.text_encoder(text_emb)
+        z_pred = self.predictor(z_ctx, a_text)
         y_hat  = self.decoder(z_pred)
 
         z_tgt_sg: torch.Tensor | None = None

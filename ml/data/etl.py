@@ -156,9 +156,12 @@ def _build_cond(
 ) -> np.ndarray:
     """[T, Z, N_COND] panel — time encodings always present; condition loaders fill the rest."""
     cond = np.zeros((len(timestamps), n_zones, N_COND), np.float32)
-    enc  = _time_encodings(timestamps)
+    if N_COND == 0:
+        return cond
+    enc = _time_encodings(timestamps)
     for ci, name in enumerate(("hour_sin", "hour_cos", "dow_sin", "dow_cos")):
-        cond[:, :, COND_IDX[name]] = enc[:, ci, None]
+        if name in COND_IDX:
+            cond[:, :, COND_IDX[name]] = enc[:, ci, None]
 
     if not loaders:
         return cond
@@ -187,11 +190,12 @@ def _normalise(values: np.ndarray, train_end: int) -> tuple[np.ndarray, dict]:
 
 
 def _make_windows(
-    values:  np.ndarray,
-    masks:   np.ndarray,
-    quality: np.ndarray,
-    cond:    np.ndarray,
-    static:  np.ndarray,
+    values:     np.ndarray,
+    masks:      np.ndarray,
+    quality:    np.ndarray,
+    cond:       np.ndarray,
+    static:     np.ndarray,
+    text_panel: np.ndarray,        # [T, TEXT_DIM]
     context_len: int,
     horizon: int,
     target_len: int,
@@ -204,7 +208,7 @@ def _make_windows(
     if not idxs:
         idxs = range(t_start, max(t_start + 1, t_end - context_len - cond_len + 1), 1)
 
-    vc, mc, qc, cf, vt, mt = [], [], [], [], [], []
+    vc, mc, qc, cf, vt, mt, te = [], [], [], [], [], [], []
     for i in idxs:
         ctx_s, ctx_e = i, i + context_len
         tgt_s, tgt_e = ctx_e + horizon, ctx_e + horizon + target_len
@@ -213,6 +217,7 @@ def _make_windows(
         vc.append(values[ctx_s:ctx_e]); mc.append(masks[ctx_s:ctx_e])
         qc.append(quality[ctx_s:ctx_e]); cf.append(cond[ctx_e:tgt_e])
         vt.append(values[tgt_s:tgt_e]); mt.append(masks[tgt_s:tgt_e])
+        te.append(text_panel[ctx_e:tgt_e].mean(axis=0))  # mean over transition window
 
     N = len(vc)
     return {
@@ -223,6 +228,7 @@ def _make_windows(
         "static":      torch.tensor(np.tile(static, (N, 1, 1)), dtype=torch.float32),
         "values_tgt":  torch.tensor(np.stack(vt),  dtype=torch.float32),
         "masks_tgt":   torch.tensor(np.stack(mt),  dtype=torch.bool),
+        "text_emb":    torch.tensor(np.stack(te),  dtype=torch.float32),  # [N, TEXT_DIM]
     }
 
 
@@ -251,6 +257,9 @@ def build_dataset(cfg: dict, output_dir: Path, cache_dir: Path) -> Path:
         values, masks, quality = _build_panel(loaders, timestamps, n_zones, zone_ids)
         cond = _build_cond(timestamps, n_zones, zone_ids, loaders)
 
+        from ml.data.loaders.headlines import build_text_panel
+        text_panel = build_text_panel(timestamps)
+
         train_end = int(n_hours * train_frac)
         val_end   = int(n_hours * (train_frac + val_frac))
         values, scaler = _normalise(values, train_end)
@@ -259,6 +268,7 @@ def build_dataset(cfg: dict, output_dir: Path, cache_dir: Path) -> Path:
         static[:, 4] = np.arange(n_zones, dtype=np.float32)
 
         kw = dict(values=values, masks=masks, quality=quality, cond=cond, static=static,
+                  text_panel=text_panel,
                   context_len=context_len, horizon=horizon, target_len=target_len, stride=stride)
         train_split = _make_windows(**kw, t_start=0,             t_end=train_end)
         val_split   = _make_windows(**kw, t_start=train_end+gap, t_end=val_end)

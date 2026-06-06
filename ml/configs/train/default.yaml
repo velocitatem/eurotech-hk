@@ -1,12 +1,11 @@
 # model
-d_model:     128
+d_model:     512
 n_zones:     8
 patch_size:  6         # 6-hour patches → 28 patches from 168h context
 max_patches: 64        # supports up to 384h context at patch_size=6
-enc_heads:   4
-enc_layers:  3
-cond_heads:  4
-cond_layers: 2
+enc_heads:   8
+enc_layers:  6
+text_dim:    1024         # Qwen3-Embedding-0.6B output dim
 target_len:  24
 
 # loss weights
@@ -16,7 +15,7 @@ lambda_reg: 1.0e-5
 # training
 learning_rate:    0.0003
 batch_size:       32
-epochs:           20
+epochs:           100
 ema_decay:        0.996
 log_every_n_steps: 20
 seed:             42

@@ -29,6 +29,7 @@ dependencies = [
   "seleniumbase",
   "streamlit",
   "tensorboard",
+  "sentence-transformers",
   "torch",
   "tqdm",
   "uvicorn[standard]",
